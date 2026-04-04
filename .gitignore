@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec.bak
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Application data (user-specific, not in repo)
+*.db
+*.db-journal
+*.db-wal
+config/config.json
+config/file_mappings.json
+*.xlsx
+*.xls
+*.csv
+
+# Build artifacts
+dist/
+build/
+*.exe
+
+# PyInstaller
+*.manifest
+*.spec.bak
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

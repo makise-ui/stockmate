@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual ZPL Designer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Sidebar: Toolbox -->
+        <aside class="toolbox">
+            <h2>Toolbox</h2>
+            <div class="tool-item" draggable="true" data-type="text">
+                <span class="icon">T</span> Text
+            </div>
+            <div class="tool-item" draggable="true" data-type="barcode">
+                <span class="icon">|||</span> Barcode (128)
+            </div>
+            <div class="tool-item" draggable="true" data-type="qrcode">
+                <span class="icon">::</span> QR Code
+            </div>
+            <div class="tool-item" draggable="true" data-type="box">
+                <span class="icon">⬜</span> Box/Line
+            </div>
+
+            <div class="settings-group">
+                <h3>Label Settings</h3>
+                <label>Width (dots): <input type="number" id="label-width" value="830"></label>
+                <label>Height (dots): <input type="number" id="label-height" value="176"></label>
+                <button id="update-canvas">Update Size</button>
+                <button id="reset-canvas" class="danger-btn" style="margin-top: 10px;">Reset to Default</button>
+            </div>
+        </aside>
+
+        <!-- Center: Canvas Area -->
+        <main class="workspace">
+            <div class="canvas-wrapper">
+                <div id="zpl-canvas" class="zpl-canvas">
+                    <!-- Dropped items will appear here -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar: Properties & Output -->
+        <aside class="properties-panel">
+            <div class="properties-section">
+                <h2>Properties</h2>
+                <div id="no-selection-msg">Select an element to edit properties</div>
+                <div id="properties-form" style="display: none;">
+                    <label>Type: <span id="prop-type"></span></label>
+
+                    <div class="form-group">
+                        <label for="prop-x">X:</label>
+                        <input type="number" id="prop-x">
+                    </div>
+                    <div class="form-group">
+                        <label for="prop-y">Y:</label>
+                        <input type="number" id="prop-y">
+                    </div>
+
+                    <div class="form-group" id="group-text">
+                        <label for="prop-text">Data/Text:</label>
+                        <textarea id="prop-text"></textarea>
+                    </div>
+
+                    <div class="form-group" id="group-font">
+                        <label for="prop-font-height">Font Height:</label>
+                        <input type="number" id="prop-font-height" value="30">
+                        <label for="prop-font-width">Font Width:</label>
+                        <input type="number" id="prop-font-width" value="30">
+                    </div>
+
+                    <div class="form-group" id="group-dims" style="display:none;">
+                        <label for="prop-width">Width:</label>
+                        <input type="number" id="prop-width">
+                        <label for="prop-height">Height:</label>
+                        <input type="number" id="prop-height">
+                        <label for="prop-thickness">Thickness:</label>
+                        <input type="number" id="prop-thickness" value="1">
+                    </div>
+
+                    <button id="delete-btn" class="danger-btn">Delete Element</button>
+                </div>
+            </div>
+
+            <div class="output-section">
+                <h2>Real ZPL Preview (Labelary)</h2>
+                <div id="preview-container" style="min-height: 100px; background: #999; padding: 10px; text-align: center;">
+                    <img id="labelary-image" alt="Generating Preview..." style="max-width: 100%; border: 1px solid #000; display: none;">
+                    <span id="loading-text" style="color: white; font-size: 0.8rem;">Waiting for update...</span>
+                </div>
+
+                <h3>ZPL Code</h3>
+                <textarea id="zpl-output" readonly></textarea>
+                <button id="copy-zpl">Copy to Clipboard</button>
+                <button id="preview-zpl">Update Preview</button>
+            </div>
+        </aside>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

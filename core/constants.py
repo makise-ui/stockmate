@@ -1,0 +1,29 @@
+# Status Constants
+STATUS_IN = "IN"
+STATUS_OUT = "OUT"  # Sold
+STATUS_RETURN = "RTN"  # Returned from customer
+
+# Log Action Constants
+ACTION_STATUS_CHANGE = "STATUS_CHANGE"
+ACTION_DATA_UPDATE = "DATA_UPDATE"
+ACTION_MERGE = "MERGE"
+ACTION_RELOAD = "RELOAD"
+ACTION_REDIRECT = "REDIRECT"
+ACTION_ITEM_UPDATE = "ITEM_UPDATE"
+ACTION_RESOLVE_CONFLICT = "RESOLVE_CONFLICT"
+
+# Canonical Field Names
+FIELD_IMEI = "imei"
+FIELD_MODEL = "model"
+FIELD_PRICE = "price"
+FIELD_PRICE_ORIGINAL = "price_original"
+FIELD_STATUS = "status"
+FIELD_BUYER = "buyer"
+FIELD_BUYER_CONTACT = "buyer_contact"
+FIELD_UNIQUE_ID = "unique_id"
+FIELD_SOURCE_FILE = "source_file"
+FIELD_NOTES = "notes"
+FIELD_COLOR = "color"
+FIELD_RAM_ROM = "ram_rom"
+FIELD_GRADE = "grade"
+FIELD_CONDITION = "condition"
