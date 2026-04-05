@@ -474,6 +474,11 @@ class ManageFilesScreen(BaseScreen):
         if inventory is not None and hasattr(inventory, "reload_all"):
             inventory.reload_all()
 
+        # Refresh the inventory screen's treeview
+        app = self.app.get("app")
+        if app is not None and hasattr(app, "_refresh_ui"):
+            app._refresh_ui()
+
         self.app["app"].show_toast(
             "File Mapped", "Excel file mapped successfully.", "success"
         )

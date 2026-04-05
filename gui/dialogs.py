@@ -233,7 +233,7 @@ class MapColumnsDialog(tk.Toplevel):
         for field, cb in self._comboboxes.items():
             val = cb.get()
             if val:
-                mapping[field] = val
+                mapping[val] = field
 
         sheet = self._sheet_var.get() or 0
         save_data = {
@@ -247,8 +247,8 @@ class MapColumnsDialog(tk.Toplevel):
         if len(self._sheet_names) > 1 and sheet:
             key = f"{self._file_path}::{sheet}"
 
-        self._on_save(key, save_data)
         self.destroy()
+        self.after(0, lambda: self._on_save(key, save_data))
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +294,14 @@ class SettingsDialog(tb.Toplevel):
         ttk.Entry(tab_general, textvariable=self._store_name_var).pack(
             fill=tk.X, pady=(0, 8)
         )
+
+        ttk.Label(tab_general, text="Markup %:").pack(anchor=tk.W, pady=(0, 4))
+        self._markup_var = tk.DoubleVar(
+            value=float(self._config.get("price_markup_percent", 0.0))
+        )
+        ttk.Spinbox(
+            tab_general, from_=0, to=100, textvariable=self._markup_var, width=12
+        ).pack(anchor=tk.W)
 
         # Tab 2: Printing
         tab_printing = ttk.Frame(nb, padding=12)
@@ -352,6 +360,10 @@ class SettingsDialog(tb.Toplevel):
         except ValueError:
             pass
         self._config.set("theme_name", self._theme_var.get())
+        try:
+            self._config.set("price_markup_percent", float(self._markup_var.get()))
+        except (ValueError, TypeError):
+            pass
         self.destroy()
 
 

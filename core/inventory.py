@@ -230,10 +230,17 @@ class InventoryManager:
             markup = 0.0
 
         if markup > 0:
-            price_with_markup = raw_price * (1 + markup / 100.0)
-            canonical[FIELD_PRICE] = price_with_markup.apply(
-                lambda x: round(x / 100) * 100 if x > 0 else x
-            )
+            if isinstance(raw_price, pd.Series):
+                price_with_markup = raw_price * (1 + markup / 100.0)
+                canonical[FIELD_PRICE] = price_with_markup.apply(
+                    lambda x: round(x / 100) * 100 if x > 0 else x
+                )
+            else:
+                # Scalar case (no price column in file)
+                if raw_price > 0:
+                    canonical[FIELD_PRICE] = round(raw_price * (1 + markup / 100.0) / 100) * 100
+                else:
+                    canonical[FIELD_PRICE] = raw_price
         else:
             canonical[FIELD_PRICE] = raw_price
 
@@ -516,15 +523,26 @@ class InventoryManager:
         return self.inventory_df
 
     def _detect_conflicts(self, df: pd.DataFrame) -> None:
-        """Find duplicate real IMEIs and populate *self.conflicts*."""
-        imei_df = df[df[FIELD_IMEI].str.len() > 5].copy()
+        """Find duplicate real IMEIs and populate *self.conflicts*.
+
+        Only real numeric IMEIs (14-16 digits) are checked for conflicts.
+        Text/placeholder IMEIs like "NOT ON", "DISPLAY OUT" are skipped
+        because they are not unique identifiers.
+        """
+        # Filter to rows with IMEI strings long enough to be real IMEIs
+        imei_df = df[df[FIELD_IMEI].str.len() >= 14].copy()
+        if imei_df.empty:
+            return
+
+        # Further filter: only keep rows where IMEI is purely numeric (real IMEI)
+        imei_df = imei_df[imei_df[FIELD_IMEI].str.match(r"^\d{14,16}$")]
         if imei_df.empty:
             return
 
         imei_df["imei_list"] = imei_df[FIELD_IMEI].str.split("/")
         exploded = imei_df.explode("imei_list")
         exploded["imei_list"] = exploded["imei_list"].str.strip()
-        exploded = exploded[exploded["imei_list"].str.len() > 5]
+        exploded = exploded[exploded["imei_list"].str.match(r"^\d{14,16}$")]
 
         dupes = exploded[exploded.duplicated("imei_list", keep=False)]
         if dupes.empty:

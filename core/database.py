@@ -159,9 +159,7 @@ class SQLiteDatabase:
 
     def __init__(self, db_path: str | None = None) -> None:
         if db_path is None:
-            db_path = str(
-                Path.home() / "Documents" / "StockMate" / "stockmate.db"
-            )
+            db_path = str(Path.home() / "Documents" / "StockMate" / "stockmate.db")
 
         self._db_path = db_path
         self._lock = threading.Lock()
@@ -215,6 +213,16 @@ class SQLiteDatabase:
             existing = self._conn.execute(
                 "SELECT id FROM items WHERE imei = ? AND imei_type = 'real'",
                 (clean_imei,),
+            ).fetchone()
+
+            if existing is not None:
+                return existing["id"]
+
+        # For text/placeholder IMEIs, dedup by composite key
+        if imei_type in ("text", "placeholder"):
+            existing = self._conn.execute(
+                "SELECT id FROM items WHERE imei = ? AND model = ? AND ram_rom = ? AND supplier = ? AND imei_type = ?",
+                (clean_imei, model, ram_rom, supplier, imei_type),
             ).fetchone()
 
             if existing is not None:
