@@ -1746,3 +1746,431 @@ class TestAdditionalAggressive:
         df = inventory_manager.get_inventory()
         models = set(df[FIELD_MODEL].tolist())
         assert models == {"Phone A", "Phone B"}
+
+
+# ===================================================================
+# DL-7 REGRESSION: Supplier name change must NOT remap item IDs
+# ===================================================================
+
+
+class TestDL7SupplierNameChangeDoesNotRemapIds:
+    """Regression tests for DL-7: changing the supplier name (or source file)
+    must NOT cause text/placeholder IMEI items to get new IDs and lose all
+    their metadata (status, buyer, notes, etc.).
+
+    The fix removes `supplier` from the composite dedup key for text and
+    placeholder IMEIs.  The key is now (imei, model, ram_rom) only.
+    """
+
+    # -- DB-level: same text IMEI item, different supplier → same ID --
+
+    def test_db_text_imei_same_identity_different_supplier_same_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """A text-IMEI item loaded from SupplierA then from SupplierB must
+        return the same ID — preventing orphaned metadata."""
+        id_a = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 14",
+            ram_rom="6/128",
+            supplier="SupplierA",
+            source_file="supplier_a.xlsx",
+            color="Black",
+            price_original=50000.0,
+            grade="A",
+            condition="Good",
+        )
+
+        # Simulate the same physical item appearing in a different supplier file
+        id_b = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 14",
+            ram_rom="6/128",
+            supplier="SupplierB",
+            source_file="supplier_b.xlsx",
+            color="Black",
+            price_original=50000.0,
+            grade="A",
+            condition="Good",
+        )
+
+        assert id_a == id_b, (
+            f"DL-7 REGRESSION: text IMEI item got new ID ({id_b}) when supplier "
+            f"changed from SupplierA to SupplierB (original ID={id_a}). "
+            f"This would orphan all metadata."
+        )
+
+    def test_db_placeholder_imei_same_identity_different_supplier_same_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Placeholder IMEI item must also keep its ID across supplier changes."""
+        id_a = db.get_or_create_id(
+            imei="n/a",
+            model="Samsung A54",
+            ram_rom="8/128",
+            supplier="OldSupplier",
+            source_file="old.xlsx",
+        )
+        db.update_metadata(id_a, status=STATUS_OUT, buyer="Alice", notes="Sold")
+
+        id_b = db.get_or_create_id(
+            imei="n/a",
+            model="Samsung A54",
+            ram_rom="8/128",
+            supplier="NewSupplier",
+            source_file="new.xlsx",
+        )
+
+        assert id_a == id_b, (
+            f"DL-7 REGRESSION: placeholder IMEI item got new ID ({id_b}) "
+            f"when supplier changed. Metadata (status=OUT, buyer=Alice) would be lost."
+        )
+
+        # Verify metadata is still accessible under the same ID
+        meta = db.get_metadata(id_b)
+        assert meta["status"] == STATUS_OUT
+        assert meta["buyer"] == "Alice"
+
+    def test_db_none_imei_same_identity_different_supplier_same_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """None IMEI item must also keep its ID across supplier changes."""
+        id_a = db.get_or_create_id(
+            imei=None,
+            model="Generic Phone",
+            ram_rom="4/64",
+            supplier="SupplierX",
+            source_file="x.xlsx",
+        )
+        db.update_metadata(id_a, status=STATUS_RETURN, notes="Returned")
+
+        id_b = db.get_or_create_id(
+            imei=None,
+            model="Generic Phone",
+            ram_rom="4/64",
+            supplier="SupplierY",
+            source_file="y.xlsx",
+        )
+
+        assert id_a == id_b
+
+    def test_db_text_imei_different_model_still_gets_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Different model should still get a new ID — we didn't break dedup."""
+        id_a = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 14",
+            ram_rom="6/128",
+            supplier="SupplierA",
+            source_file="a.xlsx",
+        )
+        id_b = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 15",
+            ram_rom="6/128",
+            supplier="SupplierA",
+            source_file="a.xlsx",
+        )
+        assert id_a != id_b, "Different model should get different ID"
+
+    def test_db_text_imei_different_ram_rom_still_gets_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Different ram_rom should still get a new ID."""
+        id_a = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 14",
+            ram_rom="6/128",
+            supplier="SupplierA",
+            source_file="a.xlsx",
+        )
+        id_b = db.get_or_create_id(
+            imei="NOT ON",
+            model="iPhone 14",
+            ram_rom="8/256",
+            supplier="SupplierA",
+            source_file="a.xlsx",
+        )
+        assert id_a != id_b, "Different ram_rom should get different ID"
+
+    # -- Full inventory pipeline: supplier name change in config --
+
+    def test_full_pipeline_supplier_name_change_preserves_ids(
+        self, db, config_manager, inventory_manager, temp_dir
+    ):
+        """End-to-end: items loaded, status changed, then supplier name changed
+        in config. All IDs and metadata must be preserved."""
+        excel_path = os.path.join(temp_dir, "inv_supplier.xlsx")
+
+        # 10 items with text IMEIs
+        rows = []
+        for i in range(10):
+            rows.append(
+                make_sample_item(
+                    imei="NOT ON",
+                    model=f"Model_{i}",
+                    ram_rom=f"{4 + i}/64",
+                    price=5000.0 + i * 100,
+                    supplier="SupplierA",
+                    status=STATUS_IN,
+                )
+            )
+        create_excel_file(excel_path, rows)
+
+        mapping = make_mapping(excel_path)
+        mapping["supplier"] = "SupplierA"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        # Load
+        inventory_manager.reload_all()
+        df1 = inventory_manager.get_inventory()
+        assert len(df1) == 10
+
+        # Record IDs and set some statuses
+        id_map_v1 = {}
+        for _, row in df1.iterrows():
+            id_map_v1[row[FIELD_MODEL]] = int(row[FIELD_UNIQUE_ID])
+
+        # Change statuses for items 3, 5, 7
+        for model in ["Model_3", "Model_5", "Model_7"]:
+            inventory_manager.update_item_status(id_map_v1[model], STATUS_OUT)
+        inventory_manager.update_item_status(id_map_v1["Model_1"], STATUS_RETURN)
+
+        # Now simulate supplier name change in config
+        # (This is what happens when user renames supplier in settings)
+        mapping["supplier"] = "SupplierA Corporation"  # name change
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        # Reload
+        inventory_manager.reload_all()
+        df2 = inventory_manager.get_inventory()
+
+        assert len(df2) == 10, (
+            f"DL-7: Expected 10 items after supplier name change, got {len(df2)}. "
+            f"Items were lost because they got new IDs."
+        )
+
+        # Verify IDs are stable
+        for _, row in df2.iterrows():
+            model = row[FIELD_MODEL]
+            new_id = int(row[FIELD_UNIQUE_ID])
+            old_id = id_map_v1[model]
+            assert new_id == old_id, (
+                f"DL-7: {model} changed ID from {old_id} to {new_id} after "
+                f"supplier name change. All metadata is now orphaned/lost."
+            )
+
+        # Verify statuses survived
+        status_map = {row[FIELD_MODEL]: row[FIELD_STATUS] for _, row in df2.iterrows()}
+        assert status_map["Model_3"] == STATUS_OUT
+        assert status_map["Model_5"] == STATUS_OUT
+        assert status_map["Model_7"] == STATUS_OUT
+        assert status_map["Model_1"] == STATUS_RETURN
+        # Others should still be IN
+        for i in [0, 2, 4, 6, 8, 9]:
+            assert status_map[f"Model_{i}"] == STATUS_IN, (
+                f"Model_{i} lost its IN status after supplier change"
+            )
+
+    def test_full_pipeline_supplier_rename_then_reload_multiple_times(
+        self, db, config_manager, inventory_manager, temp_dir
+    ):
+        """Supplier name changed, then reloaded 10×. IDs must stay stable."""
+        excel_path = os.path.join(temp_dir, "inv_multi.xlsx")
+
+        rows = [
+            make_sample_item(imei="NOT ON", model="Widget A", ram_rom="", price=1000),
+            make_sample_item(imei="NOT ON", model="Widget B", ram_rom="", price=2000),
+            make_sample_item(imei="NOT ON", model="Widget C", ram_rom="", price=3000),
+        ]
+        create_excel_file(excel_path, rows)
+
+        mapping = make_mapping(excel_path)
+        mapping["supplier"] = "Original Supplier"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        inventory_manager.reload_all()
+        df = inventory_manager.get_inventory()
+        original_ids = set(df[FIELD_UNIQUE_ID].astype(int).tolist())
+        original_models = set(df[FIELD_MODEL].tolist())
+
+        # Change supplier name
+        mapping["supplier"] = "Renamed Supplier Ltd."
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        # Reload 10 times
+        for i in range(10):
+            inventory_manager.reload_all()
+            df = inventory_manager.get_inventory()
+            current_ids = set(df[FIELD_UNIQUE_ID].astype(int).tolist())
+            current_models = set(df[FIELD_MODEL].tolist())
+
+            assert current_ids == original_ids, (
+                f"DL-7: IDs changed on reload #{i}. Original: {original_ids}, "
+                f"Got: {current_ids}. Items orphaned."
+            )
+            assert current_models == original_models, (
+                f"DL-7: Models lost on reload #{i}. Expected: {original_models}, "
+                f"Got: {current_models}."
+            )
+
+    def test_full_pipeline_text_imei_metadata_preserved_across_supplier_changes(
+        self, db, config_manager, inventory_manager, temp_dir
+    ):
+        """Metadata (buyer, notes) for text-IMEI items must survive supplier rename."""
+        excel_path = os.path.join(temp_dir, "inv_meta.xlsx")
+
+        rows = [
+            make_sample_item(
+                imei="NOT ON", model="Phone X", ram_rom="6/128",
+                price=15000, status=STATUS_IN,
+            ),
+        ]
+        create_excel_file(excel_path, rows)
+
+        mapping = make_mapping(excel_path)
+        mapping["supplier"] = "Supplier Old Name"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        inventory_manager.reload_all()
+        df = inventory_manager.get_inventory()
+        item_id = int(df.iloc[0][FIELD_UNIQUE_ID])
+
+        # Set metadata
+        inventory_manager.update_item_status(item_id, STATUS_OUT)
+        inventory_manager.update_item_data(item_id, {
+            "buyer": "Test Buyer",
+            "notes": "Important warranty note",
+        })
+
+        # Change supplier name
+        mapping["supplier"] = "Supplier New Name"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        # Reload
+        inventory_manager.reload_all()
+        df = inventory_manager.get_inventory()
+
+        assert len(df) == 1, "DL-7: Item lost after supplier name change"
+        assert int(df.iloc[0][FIELD_UNIQUE_ID]) == item_id, (
+            f"DL-7: ID changed from {item_id} to {int(df.iloc[0][FIELD_UNIQUE_ID])}"
+        )
+        assert df.iloc[0][FIELD_STATUS] == STATUS_OUT, (
+            "DL-7: Status lost after supplier change"
+        )
+
+        # Verify DB metadata
+        meta = db.get_metadata(item_id)
+        assert meta["status"] == STATUS_OUT
+
+    # -- Stress: 100 text-IMEI items, supplier change, all IDs preserved --
+
+    def test_stress_100_text_imei_items_supplier_change_all_ids_stable(
+        self, db, config_manager, inventory_manager, temp_dir
+    ):
+        """100 text-IMEI items. Supplier renamed. All 100 IDs must be stable."""
+        excel_path = os.path.join(temp_dir, "inv_stress.xlsx")
+
+        rows = []
+        for i in range(100):
+            rows.append(
+                make_sample_item(
+                    imei="NOT ON",
+                    model=f"StressModel_{i:03d}",
+                    ram_rom=f"{(i % 8) + 1}/{(i % 4 + 1) * 32}",
+                    price=1000.0 + i * 50,
+                    supplier="FirstSupplier",
+                    status=STATUS_IN,
+                )
+            )
+        create_excel_file(excel_path, rows)
+
+        mapping = make_mapping(excel_path)
+        mapping["supplier"] = "FirstSupplier"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        inventory_manager.reload_all()
+        df1 = inventory_manager.get_inventory()
+        assert len(df1) == 100
+
+        id_map = {
+            row[FIELD_MODEL]: int(row[FIELD_UNIQUE_ID])
+            for _, row in df1.iterrows()
+        }
+
+        # Change supplier
+        mapping["supplier"] = "SecondSupplier"
+        config_manager.set_file_mapping(excel_path, mapping)
+
+        # Reload
+        inventory_manager.reload_all()
+        df2 = inventory_manager.get_inventory()
+
+        assert len(df2) == 100, (
+            f"DL-7 STRESS: Expected 100 items, got {len(df2)}. "
+            f"{100 - len(df2)} items lost!"
+        )
+
+        for _, row in df2.iterrows():
+            model = row[FIELD_MODEL]
+            new_id = int(row[FIELD_UNIQUE_ID])
+            old_id = id_map[model]
+            assert new_id == old_id, (
+                f"DL-7 STRESS: {model} ID changed from {old_id} to {new_id}"
+            )
+
+    # -- Multiple files, same text-IMEI items, different suppliers → same ID --
+
+    def test_multiple_files_same_text_imei_items_same_id_not_new(
+        self, db, config_manager, inventory_manager, temp_dir
+    ):
+        """Two Excel files with same text-IMEI items (different supplier names)
+        should assign the SAME ID to both — not create new IDs.
+
+        Note: The DataFrame may still have 2 rows (one per file) because
+        reload_all() concatenates frames. The key DL-7 guarantee is that the
+        IDs are identical, so metadata is shared.
+        """
+        excel_a = os.path.join(temp_dir, "inv_a.xlsx")
+        excel_b = os.path.join(temp_dir, "inv_b.xlsx")
+
+        rows_a = [
+            make_sample_item(imei="NOT ON", model="Phone A", ram_rom="6/128",
+                             price=10000, supplier="SupplierA"),
+            make_sample_item(imei="NOT ON", model="Phone B", ram_rom="8/256",
+                             price=15000, supplier="SupplierA"),
+        ]
+        rows_b = [
+            make_sample_item(imei="NOT ON", model="Phone A", ram_rom="6/128",
+                             price=10000, supplier="SupplierB"),
+            make_sample_item(imei="NOT ON", model="Phone B", ram_rom="8/256",
+                             price=15000, supplier="SupplierB"),
+        ]
+        create_excel_file(excel_a, rows_a)
+        create_excel_file(excel_b, rows_b)
+
+        mapping_a = make_mapping(excel_a)
+        mapping_b = make_mapping(excel_b)
+        config_manager.set_file_mapping(excel_a, mapping_a)
+        config_manager.set_file_mapping(excel_b, mapping_b)
+
+        inventory_manager.reload_all()
+        df = inventory_manager.get_inventory()
+
+        # Both Phone A rows should have the SAME unique_id
+        phone_a_rows = df[df[FIELD_MODEL] == "Phone A"]
+        phone_a_ids = set(phone_a_rows[FIELD_UNIQUE_ID].astype(int).tolist())
+        assert len(phone_a_ids) == 1, (
+            f"DL-7: Phone A has IDs {phone_a_ids} — should be a single ID. "
+            f"Different suppliers caused new IDs to be created."
+        )
+
+        phone_b_rows = df[df[FIELD_MODEL] == "Phone B"]
+        phone_b_ids = set(phone_b_rows[FIELD_UNIQUE_ID].astype(int).tolist())
+        assert len(phone_b_ids) == 1, (
+            f"DL-7: Phone B has IDs {phone_b_ids} — should be a single ID."
+        )
+
+        # The two IDs should be different from each other (Phone A ≠ Phone B)
+        assert phone_a_ids != phone_b_ids

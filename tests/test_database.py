@@ -81,14 +81,19 @@ class TestGetOrCreateIdRealImei:
 
 
 # ---------------------------------------------------------------------------
-# get_or_create_id — text IMEI always-new
+# get_or_create_id — text IMEI dedup by (imei, model, ram_rom) — no supplier
 # ---------------------------------------------------------------------------
 
 
 class TestGetOrCreateIdTextImei:
-    """Text IMEI (non-digit, non-placeholder) should always create a new row."""
+    """Text IMEI deduplicates by (imei, model, ram_rom). Supplier is NOT part
+    of the key, so a supplier-name change does not remap the item (DL-7)."""
 
-    def test_text_imei_always_new(self, db: SQLiteDatabase) -> None:
+    def test_text_imei_same_model_ram_rom_returns_same_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Same text IMEI + same model + same ram_rom → same ID, even with
+        different supplier."""
         first = db.get_or_create_id(
             imei="serial-abc-123",
             model="Nokia 3310",
@@ -100,6 +105,46 @@ class TestGetOrCreateIdTextImei:
             imei="serial-abc-123",
             model="Nokia 3310",
             ram_rom="",
+            supplier="DifferentSupplier",
+            source_file="other.xlsx",
+        )
+        assert second == first
+
+    def test_text_imei_different_model_returns_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Same text IMEI but different model → new ID."""
+        first = db.get_or_create_id(
+            imei="serial-abc-123",
+            model="Nokia 3310",
+            ram_rom="",
+            supplier="TestSupplier",
+            source_file="test.xlsx",
+        )
+        second = db.get_or_create_id(
+            imei="serial-abc-123",
+            model="Nokia 1100",
+            ram_rom="",
+            supplier="TestSupplier",
+            source_file="test.xlsx",
+        )
+        assert second != first
+
+    def test_text_imei_different_ram_rom_returns_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Same text IMEI + same model but different ram_rom → new ID."""
+        first = db.get_or_create_id(
+            imei="serial-abc-123",
+            model="Nokia 3310",
+            ram_rom="16MB",
+            supplier="TestSupplier",
+            source_file="test.xlsx",
+        )
+        second = db.get_or_create_id(
+            imei="serial-abc-123",
+            model="Nokia 3310",
+            ram_rom="32MB",
             supplier="TestSupplier",
             source_file="test.xlsx",
         )
@@ -107,17 +152,19 @@ class TestGetOrCreateIdTextImei:
 
 
 # ---------------------------------------------------------------------------
-# get_or_create_id — placeholder IMEI always-new
+# get_or_create_id — placeholder IMEI dedup by (imei, model, ram_rom)
 # ---------------------------------------------------------------------------
 
 
 class TestGetOrCreateIdPlaceholderImei:
-    """Placeholder IMEI (e.g. 'n/a', 'none') should always create a new row."""
+    """Placeholder IMEI deduplicates by (imei, model, ram_rom). Supplier is NOT
+    part of the key (DL-7)."""
 
     @pytest.mark.parametrize("placeholder", ["n/a", "none", "not on", "-", "unknown"])
-    def test_placeholder_imei_always_new(
+    def test_placeholder_imei_same_model_ram_rom_returns_same_id(
         self, db: SQLiteDatabase, placeholder: str
     ) -> None:
+        """Same placeholder + same model + same ram_rom → same ID."""
         first = db.get_or_create_id(
             imei=placeholder,
             model="Generic Phone",
@@ -128,24 +175,67 @@ class TestGetOrCreateIdPlaceholderImei:
         second = db.get_or_create_id(
             imei=placeholder,
             model="Generic Phone",
+            ram_rom="",
+            supplier="OtherSupplier",
+            source_file="other.xlsx",
+        )
+        assert second == first
+
+    def test_none_imei_same_model_ram_rom_returns_same_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """None IMEI + same model + same ram_rom → same ID."""
+        first = db.get_or_create_id(
+            imei=None,
+            model="Generic Phone",
+            ram_rom="",
+            supplier="TestSupplier",
+            source_file="test.xlsx",
+        )
+        second = db.get_or_create_id(
+            imei=None,
+            model="Generic Phone",
+            ram_rom="",
+            supplier="OtherSupplier",
+            source_file="other.xlsx",
+        )
+        assert second == first
+
+    def test_placeholder_imei_different_model_returns_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Same placeholder + different model → new ID."""
+        first = db.get_or_create_id(
+            imei="n/a",
+            model="Phone A",
+            ram_rom="",
+            supplier="TestSupplier",
+            source_file="test.xlsx",
+        )
+        second = db.get_or_create_id(
+            imei="n/a",
+            model="Phone B",
             ram_rom="",
             supplier="TestSupplier",
             source_file="test.xlsx",
         )
         assert second != first
 
-    def test_none_imei_always_new(self, db: SQLiteDatabase) -> None:
+    def test_placeholder_imei_different_ram_rom_returns_new_id(
+        self, db: SQLiteDatabase
+    ) -> None:
+        """Same placeholder + same model + different ram_rom → new ID."""
         first = db.get_or_create_id(
-            imei=None,
-            model="Generic Phone",
-            ram_rom="",
+            imei="n/a",
+            model="Phone A",
+            ram_rom="4/64",
             supplier="TestSupplier",
             source_file="test.xlsx",
         )
         second = db.get_or_create_id(
-            imei=None,
-            model="Generic Phone",
-            ram_rom="",
+            imei="n/a",
+            model="Phone A",
+            ram_rom="8/128",
             supplier="TestSupplier",
             source_file="test.xlsx",
         )

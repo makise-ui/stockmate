@@ -5,6 +5,7 @@ Replaces JSON-based ID registry with a bulletproof SQLite backend.
 Provides IMEI-aware deduplication, metadata tracking, and full audit history.
 """
 
+import logging
 import os
 import re
 import shutil
@@ -13,6 +14,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -140,6 +143,17 @@ def _classify_imei(raw: str | None) -> str:
     return "text"
 
 
+def _clean_imei_for_db(raw: str | None) -> str:
+    """Normalise an IMEI value for database storage.
+
+    ``None`` and empty strings become ``""`` so that ``WHERE imei = ?``
+    matches correctly (SQLite ``NULL`` comparisons are tricky).
+    """
+    if raw is None:
+        return ""
+    return raw.strip()
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     """Convert a sqlite3.Row into a plain dict."""
     return dict(row)
@@ -176,6 +190,8 @@ class SQLiteDatabase:
         self._conn.execute("PRAGMA foreign_keys=ON")
 
         self._create_schema()
+        self._check_integrity()
+        self._auto_backup()
 
     # ---- private helpers ---------------------------------------------------
 
@@ -183,6 +199,74 @@ class SQLiteDatabase:
         """Execute the full schema creation SQL (safe: IF NOT EXISTS)."""
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
+
+    def _check_integrity(self) -> None:
+        """Run ``PRAGMA integrity_check`` on startup.
+
+        If the database is corrupt, attempt to restore from the latest backup.
+        Logs a warning but does not crash — a fresh schema will be created
+        on next access.
+        """
+        try:
+            result = self._conn.execute("PRAGMA integrity_check").fetchone()
+            if result and result[0] != "ok":
+                logger.warning(
+                    "Database integrity check failed: %s. "
+                    "Attempting restore from latest backup.",
+                    result[0],
+                )
+                self._restore_from_latest_backup()
+        except Exception as exc:
+            logger.warning("Integrity check error (non-fatal): %s", exc)
+
+    def _restore_from_latest_backup(self) -> None:
+        """Close the current connection and replace the DB file with the
+        latest backup from the backups directory."""
+        backup_dir = Path.home() / "Documents" / "StockMate" / "backups"
+        if not backup_dir.is_dir():
+            logger.warning("No backup directory found — cannot restore.")
+            return
+
+        backups = sorted(backup_dir.glob("*.db"), key=lambda p: p.stat().st_mtime)
+        if not backups:
+            logger.warning("No backup files found — cannot restore.")
+            return
+
+        latest = backups[-1]
+        self._conn.close()
+        self._conn = None  # type: ignore[assignment]
+
+        try:
+            shutil.copy2(latest, self._db_path)
+            logger.info("Database restored from %s", latest)
+            # Reopen connection on the restored file
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._create_schema()
+        except Exception as exc:
+            logger.error("Restore failed: %s. Database may be unusable.", exc)
+
+    def _auto_backup(self) -> None:
+        """Create a timestamped backup on startup if one doesn't already
+        exist for today.  This ensures every launch point is recoverable."""
+        backup_dir = Path.home() / "Documents" / "StockMate" / "backups"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+
+        today = datetime.now().strftime("%Y%m%d")
+        existing_today = list(backup_dir.glob(f"mobile_shop_backup_{today}_*.db"))
+        if existing_today:
+            return  # Already backed up today
+
+        try:
+            self.backup_db(str(backup_dir))
+            logger.info("Auto-backup created on startup")
+        except Exception as exc:
+            logger.warning("Auto-backup failed (non-fatal): %s", exc)
 
     # ---- public API --------------------------------------------------------
 
@@ -202,27 +286,30 @@ class SQLiteDatabase:
         """Return an existing ID for a *real* IMEI, or insert a new row.
 
         **Rules**
-        - Real IMEI (14-16 digits): look up first; return existing or insert.
-        - Text / placeholder IMEI: always insert, always new ID.
+        - Real IMEI (14-16 digits): look up by IMEI only; return existing or insert.
+        - Text / placeholder IMEI: dedup by ``(imei, model, ram_rom)`` — supplier
+          is intentionally excluded so that a supplier-name change does not
+          remap every item to a new ID (DL-7).
         """
         imei_type = _classify_imei(imei)
-        clean_imei = imei.strip() if isinstance(imei, str) else None
+        clean_imei = _clean_imei_for_db(imei)
 
         # Guard: real IMEIs may already exist — check first
         if imei_type == "real":
             existing = self._conn.execute(
-                "SELECT id FROM items WHERE imei = ? AND imei_type = 'real'",
+                "SELECT id FROM items WHERE imei = ? AND imei_type = 'real' ORDER BY id",
                 (clean_imei,),
             ).fetchone()
 
             if existing is not None:
                 return existing["id"]
 
-        # For text/placeholder IMEIs, dedup by composite key
+        # For text/placeholder IMEIs, dedup by composite key WITHOUT supplier.
+        # Supplier is a business attribute, not an identity component.
         if imei_type in ("text", "placeholder"):
             existing = self._conn.execute(
-                "SELECT id FROM items WHERE imei = ? AND model = ? AND ram_rom = ? AND supplier = ? AND imei_type = ?",
-                (clean_imei, model, ram_rom, supplier, imei_type),
+                "SELECT id FROM items WHERE imei = ? AND model = ? AND ram_rom = ? AND imei_type = ? ORDER BY id",
+                (clean_imei, model, ram_rom, imei_type),
             ).fetchone()
 
             if existing is not None:
@@ -477,7 +564,12 @@ class SQLiteDatabase:
             return None
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection after checkpointing the WAL."""
         if self._conn:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.commit()
+            except Exception:
+                pass
             self._conn.close()
             self._conn = None  # type: ignore[assignment]
