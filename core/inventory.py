@@ -152,6 +152,91 @@ class InventoryManager:
     # Normalisation — the heavy lifter
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _norm_status(val: Any) -> str:
+        s = str(val).upper().strip()
+        if s in (STATUS_OUT, "SOLD", "SALE"):
+            return STATUS_OUT
+        if s in (STATUS_RETURN, "RETURN", "RET"):
+            return STATUS_RETURN
+        return STATUS_IN
+
+    @staticmethod
+    def _get_col(df: pd.DataFrame, mapping: dict[str, str], canonical_name: str) -> pd.Series | None:
+        """Return the raw Series that maps to *canonical_name*, or None."""
+        for raw_col, can_name in mapping.items():
+            if can_name == canonical_name and raw_col in df.columns:
+                return df[raw_col].astype(object)
+        return None
+
+    @staticmethod
+    def _clean_imei(val: Any) -> str:
+        if pd.isna(val):
+            return ""
+        s = str(val).strip()
+        digits = re.findall(r"\d{14,16}", s)
+        if len(digits) > 1:
+            return " / ".join(sorted(set(digits)))
+        if len(digits) == 1:
+            return digits[0]
+        return s
+
+    def _apply_overrides(self, row: pd.Series, item_map: dict[int, dict[str, Any]]) -> pd.Series:
+        uid = int(row[FIELD_UNIQUE_ID])
+        item_data = item_map.get(uid)
+
+        if not item_data:
+            return row
+
+        # Restore added_date
+        if item_data.get("added_date"):
+            try:
+                row["date_added"] = datetime.datetime.fromisoformat(
+                    item_data["added_date"]
+                )
+            except (ValueError, TypeError):
+                pass
+
+        # Override status from DB
+        if item_data.get("status"):
+            row[FIELD_STATUS] = self._norm_status(item_data["status"])
+
+        # Restore sold_date
+        if item_data.get("sold_date"):
+            try:
+                row["date_sold"] = datetime.datetime.fromisoformat(
+                    item_data["sold_date"]
+                )
+            except (ValueError, TypeError):
+                pass
+
+        # Override notes
+        if item_data.get("notes"):
+            row[FIELD_NOTES] = item_data["notes"]
+
+        # Override color, grade, condition from stored values
+        if item_data.get(FIELD_COLOR):
+            row[FIELD_COLOR] = item_data[FIELD_COLOR]
+        if item_data.get(FIELD_GRADE):
+            row[FIELD_GRADE] = item_data[FIELD_GRADE]
+        if item_data.get(FIELD_CONDITION):
+            row[FIELD_CONDITION] = item_data[FIELD_CONDITION]
+
+        # Price override
+        if item_data.get("price_override") is not None:
+            row[FIELD_PRICE_ORIGINAL] = float(item_data["price_override"])
+            try:
+                m = float(self.config_manager.get("price_markup_percent", 0.0))
+            except (ValueError, TypeError):
+                m = 0.0
+            if m > 0:
+                raw_p = row[FIELD_PRICE_ORIGINAL] * (1 + m / 100.0)
+                row[FIELD_PRICE] = round(raw_p / 100) * 100 if raw_p > 0 else raw_p
+            else:
+                row[FIELD_PRICE] = row[FIELD_PRICE_ORIGINAL]
+
+        return row
+
     def _normalize_data(
         self, df: pd.DataFrame, mapping_data: dict, file_path: str
     ) -> pd.DataFrame:
@@ -160,46 +245,18 @@ class InventoryManager:
         mapping: dict[str, str] = mapping_data.get("mapping") or {}
         file_supplier: str = mapping_data.get("supplier", "")
 
-        # ---- pure helpers ------------------------------------------------
-
-        def norm_status(val: Any) -> str:
-            s = str(val).upper().strip()
-            if s in (STATUS_OUT, "SOLD", "SALE"):
-                return STATUS_OUT
-            if s in (STATUS_RETURN, "RETURN", "RET"):
-                return STATUS_RETURN
-            return STATUS_IN
-
-        def get_col(canonical_name: str) -> pd.Series | None:
-            """Return the raw Series that maps to *canonical_name*, or None."""
-            for raw_col, can_name in mapping.items():
-                if can_name == canonical_name and raw_col in df.columns:
-                    return df[raw_col].astype(object)
-            return None
-
-        def clean_imei(val: Any) -> str:
-            if pd.isna(val):
-                return ""
-            s = str(val).strip()
-            digits = re.findall(r"\d{14,16}", s)
-            if len(digits) > 1:
-                return " / ".join(sorted(set(digits)))
-            if len(digits) == 1:
-                return digits[0]
-            return s
-
         # ---- build canonical DataFrame -----------------------------------
 
         canonical = pd.DataFrame()
 
         # IMEI
-        col_imei = get_col(FIELD_IMEI)
+        col_imei = self._get_col(df, mapping, FIELD_IMEI)
         canonical[FIELD_IMEI] = (
-            col_imei.apply(clean_imei) if col_imei is not None else ""
+            col_imei.apply(self._clean_imei) if col_imei is not None else ""
         )
 
         # Model
-        col_model = get_col(FIELD_MODEL)
+        col_model = self._get_col(df, mapping, FIELD_MODEL)
         canonical[FIELD_MODEL] = (
             col_model.fillna("Unknown Model").astype(str)
             if col_model is not None
@@ -207,7 +264,7 @@ class InventoryManager:
         )
 
         # Brand
-        col_brand = get_col("brand")
+        col_brand = self._get_col(df, mapping, "brand")
         if col_brand is not None:
             canonical["brand"] = col_brand.fillna("").astype(str).str.upper()
         else:
@@ -216,7 +273,7 @@ class InventoryManager:
             )
 
         # Price
-        col_price = get_col(FIELD_PRICE)
+        col_price = self._get_col(df, mapping, FIELD_PRICE)
         if col_price is not None:
             raw_price = pd.to_numeric(col_price, errors="coerce").fillna(0.0)
         else:
@@ -245,12 +302,12 @@ class InventoryManager:
             canonical[FIELD_PRICE] = raw_price
 
         # RAM / ROM
-        col_ram_rom = get_col(FIELD_RAM_ROM)
+        col_ram_rom = self._get_col(df, mapping, FIELD_RAM_ROM)
         if col_ram_rom is not None:
             canonical[FIELD_RAM_ROM] = col_ram_rom.fillna("").astype(str)
         else:
-            col_ram = get_col("ram")
-            col_rom = get_col("rom")
+            col_ram = self._get_col(df, mapping, "ram")
+            col_rom = self._get_col(df, mapping, "rom")
             if col_ram is not None and col_rom is not None:
                 canonical[FIELD_RAM_ROM] = (
                     col_ram.fillna("").astype(str)
@@ -283,43 +340,43 @@ class InventoryManager:
                     canonical[FIELD_RAM_ROM] = ""
 
         # Supplier
-        col_supplier = get_col("supplier")
+        col_supplier = self._get_col(df, mapping, "supplier")
         if col_supplier is not None:
             canonical["supplier"] = col_supplier.fillna(file_supplier).astype(str)
         else:
             canonical["supplier"] = file_supplier
 
         # Status
-        col_status = get_col(FIELD_STATUS)
+        col_status = self._get_col(df, mapping, FIELD_STATUS)
         if col_status is not None:
-            canonical[FIELD_STATUS] = col_status.apply(norm_status)
+            canonical[FIELD_STATUS] = col_status.apply(self._norm_status)
         else:
             canonical[FIELD_STATUS] = STATUS_IN
 
         # Color
-        col_color = get_col(FIELD_COLOR)
+        col_color = self._get_col(df, mapping, FIELD_COLOR)
         canonical[FIELD_COLOR] = (
             col_color.fillna("").astype(str) if col_color is not None else ""
         )
 
         # Buyer
-        col_buyer = get_col(FIELD_BUYER)
+        col_buyer = self._get_col(df, mapping, FIELD_BUYER)
         canonical[FIELD_BUYER] = (
             col_buyer.fillna("").astype(str) if col_buyer is not None else ""
         )
 
-        col_contact = get_col(FIELD_BUYER_CONTACT)
+        col_contact = self._get_col(df, mapping, FIELD_BUYER_CONTACT)
         canonical[FIELD_BUYER_CONTACT] = (
             col_contact.fillna("").astype(str) if col_contact is not None else ""
         )
 
         # Grade / Condition
-        col_grade = get_col(FIELD_GRADE)
+        col_grade = self._get_col(df, mapping, FIELD_GRADE)
         canonical[FIELD_GRADE] = (
             col_grade.fillna("").astype(str) if col_grade is not None else ""
         )
 
-        col_condition = get_col(FIELD_CONDITION)
+        col_condition = self._get_col(df, mapping, FIELD_CONDITION)
         canonical[FIELD_CONDITION] = (
             col_condition.fillna("").astype(str) if col_condition is not None else ""
         )
@@ -354,63 +411,7 @@ class InventoryManager:
         items_data = self.db.get_items_by_ids(int_ids)
         item_map: dict[int, dict[str, Any]] = {item["id"]: item for item in items_data}
 
-        def apply_overrides(row: pd.Series) -> pd.Series:
-            uid = int(row[FIELD_UNIQUE_ID])
-            item_data = item_map.get(uid)
-
-            if not item_data:
-                return row
-
-            # Restore added_date
-            if item_data.get("added_date"):
-                try:
-                    row["date_added"] = datetime.datetime.fromisoformat(
-                        item_data["added_date"]
-                    )
-                except (ValueError, TypeError):
-                    pass
-
-            # Override status from DB
-            if item_data.get("status"):
-                row[FIELD_STATUS] = norm_status(item_data["status"])
-
-            # Restore sold_date
-            if item_data.get("sold_date"):
-                try:
-                    row["date_sold"] = datetime.datetime.fromisoformat(
-                        item_data["sold_date"]
-                    )
-                except (ValueError, TypeError):
-                    pass
-
-            # Override notes
-            if item_data.get("notes"):
-                row[FIELD_NOTES] = item_data["notes"]
-
-            # Override color, grade, condition from stored values
-            if item_data.get(FIELD_COLOR):
-                row[FIELD_COLOR] = item_data[FIELD_COLOR]
-            if item_data.get(FIELD_GRADE):
-                row[FIELD_GRADE] = item_data[FIELD_GRADE]
-            if item_data.get(FIELD_CONDITION):
-                row[FIELD_CONDITION] = item_data[FIELD_CONDITION]
-
-            # Price override
-            if item_data.get("price_override") is not None:
-                row[FIELD_PRICE_ORIGINAL] = float(item_data["price_override"])
-                try:
-                    m = float(self.config_manager.get("price_markup_percent", 0.0))
-                except (ValueError, TypeError):
-                    m = 0.0
-                if m > 0:
-                    raw_p = row[FIELD_PRICE_ORIGINAL] * (1 + m / 100.0)
-                    row[FIELD_PRICE] = round(raw_p / 100) * 100 if raw_p > 0 else raw_p
-                else:
-                    row[FIELD_PRICE] = row[FIELD_PRICE_ORIGINAL]
-
-            return row
-
-        canonical = canonical.apply(apply_overrides, axis=1)
+        canonical = canonical.apply(lambda row: self._apply_overrides(row, item_map), axis=1)
 
         # ---- Ensure all required columns exist ---------------------------
 
