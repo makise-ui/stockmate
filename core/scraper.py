@@ -74,43 +74,47 @@ class PhoneScraper:
             raise ValueError("PKCS7 padding mismatch")
         return data[:-pad_len]
 
+    def _fetch(
+        self, url: str, error_msg_prefix: str, parser_func, params: Optional[dict[str, str]] = None
+    ) -> Optional[str]:
+        """Fetch a URL, parse the response, and handle exceptions globally."""
+        try:
+            resp = self._session.get(url, params=params, timeout=_REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            return parser_func(resp)
+        except Exception as exc:
+            logger.debug("%s: %s", error_msg_prefix, exc)
+            return None
+
     def _resolve_model_code(self, imei: str) -> Optional[str]:
         """Look up the model / product code for a given IMEI."""
         if not self._is_valid_imei(imei):
             return None
 
-        try:
-            resp = self._session.get(
-                f"https://api.imeicheck.com/imei/{imei}",
-                timeout=_REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
+        def parse_imei(resp: requests.Response) -> Optional[str]:
             data = resp.json()
             return data.get("model_code") or data.get("product_code")
-        except Exception as exc:
-            logger.debug("IMEI lookup failed for %s: %s", imei, exc)
-            return None
+
+        return self._fetch(
+            f"https://api.imeicheck.com/imei/{imei}",
+            f"IMEI lookup failed for {imei}",
+            parse_imei
+        )
 
     def _search_gsmarena(self, model_code: str) -> Optional[str]:
         """Search GSMArena and return the best-match phone full name."""
-        try:
-            resp = self._session.get(
-                _GSMARENA_SEARCH_URL,
-                params={"sQuickSearch": "yes", "sName": model_code},
-                timeout=_REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
-
-            # Attempt to detect encrypted payload in response
+        def parse_gsmarena(resp: requests.Response) -> Optional[str]:
             phone_name = self._try_decrypt_response(resp.content)
             if phone_name is not None:
                 return phone_name
-
-            # Fall back to HTML parsing
             return self._parse_search_html(resp.text)
-        except Exception as exc:
-            logger.debug("GSMArena search failed for '%s': %s", model_code, exc)
-            return None
+
+        return self._fetch(
+            _GSMARENA_SEARCH_URL,
+            f"GSMArena search failed for '{model_code}'",
+            parse_gsmarena,
+            params={"sQuickSearch": "yes", "sName": model_code}
+        )
 
     def _try_decrypt_response(self, raw: bytes) -> Optional[str]:
         """If the response body looks like an encrypted blob, decrypt it.
