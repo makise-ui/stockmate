@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import threading
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -513,28 +514,41 @@ class SQLiteDatabase:
             """
         ).fetchall()
 
-        results: list[dict[str, Any]] = []
-        for row in duplicate_imeis:
-            imei_value = row["imei"]
+        imeis_to_fetch = [row["imei"] for row in duplicate_imeis]
+        if not imeis_to_fetch:
+            return []
+
+        all_duplicate_items = []
+        batch_size = 900
+        for i in range(0, len(imeis_to_fetch), batch_size):
+            batch = imeis_to_fetch[i : i + batch_size]
+            placeholders = ",".join("?" * len(batch))
+
             items = self._conn.execute(
-                """
+                f"""
                 SELECT i.*, m.status, m.buyer, m.buyer_contact, m.notes,
                        m.price_override, m.sold_date, m.added_date,
                        m.is_hidden, m.merged_into, m.merge_reason
                 FROM items i
                 LEFT JOIN metadata m ON m.id = i.id
-                WHERE i.imei = ?
+                WHERE i.imei IN ({placeholders})
                 ORDER BY i.id
                 """,
-                (imei_value,),
+                batch,
             ).fetchall()
+            all_duplicate_items.extend(items)
 
-            results.append(
-                {
-                    "imei": imei_value,
-                    "items": [_row_to_dict(it) for it in items],
-                }
-            )
+        grouped = defaultdict(list)
+        for row in all_duplicate_items:
+            grouped[row["imei"]].append(_row_to_dict(row))
+
+        results: list[dict[str, Any]] = [
+            {
+                "imei": imei,
+                "items": grouped[imei],
+            }
+            for imei in imeis_to_fetch
+        ]
 
         return results
 
