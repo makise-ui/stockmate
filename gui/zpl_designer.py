@@ -533,6 +533,7 @@ class ZPLDesignerScreen(BaseScreen):
                 url,
                 data=final_zpl,
                 headers={"Accept": "image/png"},
+                timeout=10,
             )
 
             if response.status_code == 200:
