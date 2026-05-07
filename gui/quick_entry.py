@@ -109,6 +109,15 @@ class QuickEntryScreen(BaseScreen):
         # Header
         self.add_header("Quick Entry", help_section="Core Features")
 
+        self._build_top_bar()
+        self._build_form_fields()
+        self._build_action_buttons()
+        self._setup_bindings()
+
+        # Initialize View based on default mode
+        self._toggle_batch_mode()
+
+    def _build_top_bar(self) -> None:
         # --- Top Bar: File & Settings ---
         top_bar = ttk.Frame(self, padding=10)
         top_bar.pack(fill=tk.X)
@@ -149,6 +158,7 @@ class QuickEntryScreen(BaseScreen):
             bootstyle="round-toggle",
         ).pack(side=tk.RIGHT, padx=10)
 
+    def _build_form_fields(self) -> None:
         # --- Main Form (Single Entry) ---
         self.form_frame = ttk.LabelFrame(self, text="New Entry Details", padding=15)
 
@@ -157,24 +167,6 @@ class QuickEntryScreen(BaseScreen):
 
         # Grid Layout Helper
         r = 0
-
-        def add_field(
-            label: str,
-            var: tk.StringVar,
-            widget_cls: type[ttk.Entry] = ttk.Entry,
-            **kwargs: Any,
-        ) -> tuple[Any, int]:
-            nonlocal r
-            ttk.Label(self.form_frame, text=label).grid(
-                row=r,
-                column=0,
-                sticky=tk.W,
-                pady=5,
-            )
-            w = widget_cls(self.form_frame, textvariable=var, **kwargs)
-            w.grid(row=r, column=1, sticky=tk.EW, padx=5, pady=5)
-            w.bind("<Return>", lambda e: w.tk_focusNext().focus())
-            return w, r
 
         # 1. IMEI
         ttk.Label(self.form_frame, text="IMEI / SN:").grid(
@@ -300,6 +292,10 @@ class QuickEntryScreen(BaseScreen):
         self.ent_cond.pack(side=tk.LEFT, padx=5)
         r += 1
 
+        # Configure Grid Weights
+        self.form_frame.columnconfigure(1, weight=1)
+
+    def _build_action_buttons(self) -> None:
         # --- Action Bar ---
         action_bar = ttk.Frame(self, padding=20)
         action_bar.pack(fill=tk.X, side=tk.BOTTOM)
@@ -320,9 +316,7 @@ class QuickEntryScreen(BaseScreen):
         self.lbl_status = ttk.Label(action_bar, text="Ready", foreground="gray")
         self.lbl_status.pack(side=tk.LEFT)
 
-        # Configure Grid Weights
-        self.form_frame.columnconfigure(1, weight=1)
-
+    def _setup_bindings(self) -> None:
         # --- BINDINGS ---
         self.field_order: list[tuple[tk.Widget, tk.BooleanVar | None]] = [
             (self.ent_imei, None),
@@ -347,9 +341,6 @@ class QuickEntryScreen(BaseScreen):
                 "<Down>", lambda e, idx=i: self._smart_focus_next(idx, check_lock=False)
             )
             widget.bind("<Up>", lambda e, idx=i: self._focus_prev(idx))
-
-        # Initialize View based on default mode
-        self._toggle_batch_mode()
 
     # -- helpers -------------------------------------------------------------
 
