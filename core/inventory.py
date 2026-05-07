@@ -352,65 +352,85 @@ class InventoryManager:
         unique_ids = canonical[FIELD_UNIQUE_ID].unique().tolist()
         int_ids = [int(uid) for uid in unique_ids]
         items_data = self.db.get_items_by_ids(int_ids)
-        item_map: dict[int, dict[str, Any]] = {item["id"]: item for item in items_data}
 
-        def apply_overrides(row: pd.Series) -> pd.Series:
-            uid = int(row[FIELD_UNIQUE_ID])
-            item_data = item_map.get(uid)
+        if items_data:
+            import numpy as np
 
-            if not item_data:
-                return row
+            df_items = pd.DataFrame(items_data)
+            df_items.rename(columns={"id": FIELD_UNIQUE_ID}, inplace=True)
 
-            # Restore added_date
-            if item_data.get("added_date"):
-                try:
-                    row["date_added"] = datetime.datetime.fromisoformat(
-                        item_data["added_date"]
+            canonical.set_index(FIELD_UNIQUE_ID, inplace=True)
+            df_items.set_index(FIELD_UNIQUE_ID, inplace=True)
+
+            updates = pd.DataFrame(index=df_items.index)
+
+            if "added_date" in df_items.columns:
+                if "date_added" not in canonical.columns:
+                    canonical["date_added"] = pd.NaT
+                updates["date_added"] = pd.to_datetime(
+                    df_items["added_date"], format="ISO8601", errors="coerce"
+                )
+                if "date_added" in canonical.columns:
+                    updates["date_added"] = updates["date_added"].astype(
+                        canonical["date_added"].dtype
                     )
-                except (ValueError, TypeError):
-                    pass
 
-            # Override status from DB
-            if item_data.get("status"):
-                row[FIELD_STATUS] = norm_status(item_data["status"])
+            if "status" in df_items.columns:
+                if FIELD_STATUS not in canonical.columns:
+                    canonical[FIELD_STATUS] = STATUS_IN
+                s_str = df_items["status"].astype(str).str.upper().str.strip()
+                df_items["_status_norm"] = STATUS_IN
+                df_items.loc[s_str.isin([STATUS_OUT, "SOLD", "SALE"]), "_status_norm"] = STATUS_OUT
+                df_items.loc[s_str.isin([STATUS_RETURN, "RETURN", "RET"]), "_status_norm"] = STATUS_RETURN
 
-            # Restore sold_date
-            if item_data.get("sold_date"):
-                try:
-                    row["date_sold"] = datetime.datetime.fromisoformat(
-                        item_data["sold_date"]
+                mask = df_items["status"].notna() & (df_items["status"] != "")
+                updates[FIELD_STATUS] = df_items.loc[mask, "_status_norm"]
+
+            if "sold_date" in df_items.columns:
+                if "date_sold" not in canonical.columns:
+                    canonical["date_sold"] = pd.NaT
+                updates["date_sold"] = pd.to_datetime(
+                    df_items["sold_date"], format="ISO8601", errors="coerce"
+                )
+                if "date_sold" in canonical.columns:
+                    updates["date_sold"] = updates["date_sold"].astype(
+                        canonical["date_sold"].dtype
                     )
-                except (ValueError, TypeError):
-                    pass
 
-            # Override notes
-            if item_data.get("notes"):
-                row[FIELD_NOTES] = item_data["notes"]
+            for c in [FIELD_NOTES, FIELD_COLOR, FIELD_GRADE, FIELD_CONDITION]:
+                if c in df_items.columns:
+                    if c not in canonical.columns:
+                        canonical[c] = ""
+                    updates[c] = df_items[c].replace({"": np.nan, None: np.nan})
 
-            # Override color, grade, condition from stored values
-            if item_data.get(FIELD_COLOR):
-                row[FIELD_COLOR] = item_data[FIELD_COLOR]
-            if item_data.get(FIELD_GRADE):
-                row[FIELD_GRADE] = item_data[FIELD_GRADE]
-            if item_data.get(FIELD_CONDITION):
-                row[FIELD_CONDITION] = item_data[FIELD_CONDITION]
+            if "price_override" in df_items.columns:
+                if FIELD_PRICE_ORIGINAL not in canonical.columns:
+                    canonical[FIELD_PRICE_ORIGINAL] = 0.0
+                if FIELD_PRICE not in canonical.columns:
+                    canonical[FIELD_PRICE] = 0.0
 
-            # Price override
-            if item_data.get("price_override") is not None:
-                row[FIELD_PRICE_ORIGINAL] = float(item_data["price_override"])
+                mask_has_override = df_items["price_override"].notna()
+                df_items["_price_orig"] = pd.to_numeric(
+                    df_items["price_override"], errors="coerce"
+                )
+
                 try:
                     m = float(self.config_manager.get("price_markup_percent", 0.0))
                 except (ValueError, TypeError):
                     m = 0.0
+
                 if m > 0:
-                    raw_p = row[FIELD_PRICE_ORIGINAL] * (1 + m / 100.0)
-                    row[FIELD_PRICE] = round(raw_p / 100) * 100 if raw_p > 0 else raw_p
+                    raw_p = df_items["_price_orig"] * (1 + m / 100.0)
+                    calc_p = (raw_p / 100).round() * 100
+                    df_items["_price"] = np.where(raw_p > 0, calc_p, raw_p)
                 else:
-                    row[FIELD_PRICE] = row[FIELD_PRICE_ORIGINAL]
+                    df_items["_price"] = df_items["_price_orig"]
 
-            return row
+                updates[FIELD_PRICE_ORIGINAL] = df_items.loc[mask_has_override, "_price_orig"]
+                updates[FIELD_PRICE] = df_items.loc[mask_has_override, "_price"]
 
-        canonical = canonical.apply(apply_overrides, axis=1)
+            canonical.update(updates)
+            canonical.reset_index(inplace=True)
 
         # ---- Ensure all required columns exist ---------------------------
 
