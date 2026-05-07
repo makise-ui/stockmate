@@ -751,12 +751,57 @@ class InventoryManager:
     # Async Excel writer — runs on background thread
     # ------------------------------------------------------------------
 
+    def _find_row_by_imei(self, ws: Any, target_imei: str, imei_col_idx: int | None) -> Any | None:
+        """Helper function to find a row in a worksheet by IMEI."""
+        if not target_imei or not imei_col_idx:
+            return None
+
+        target_parts = {p.strip() for p in target_imei.split("/") if p.strip()}
+        if not target_parts:
+            return None
+
+        for row in ws.iter_rows(min_row=2):
+            cell_val = row[imei_col_idx - 1].value
+            if not cell_val:
+                continue
+
+            s_cell = str(cell_val).strip().replace(".0", "")
+            cell_parts = {p.strip() for p in s_cell.split("/") if p.strip()}
+
+            if not cell_parts:
+                continue
+
+            if target_parts == cell_parts or (target_parts & cell_parts):
+                return row
+
+        return None
+
+    def _update_excel_row(self, ws: Any, row: Any, excel_updates: dict[str, Any], col_indices: dict[str, int]) -> None:
+        """Helper function to update cells in an Excel row and apply styling."""
+        from openpyxl.styles import Font, Alignment, Border, Side
+
+        for col_name, new_val in excel_updates.items():
+            if col_name not in col_indices:
+                continue
+            cell = ws.cell(row=row[0].row, column=col_indices[col_name])
+            if isinstance(new_val, str):
+                new_val = new_val.upper()
+            cell.value = new_val
+
+            thin = Side(border_style="thin", color="000000")
+            cell.border = Border(
+                top=thin, left=thin, right=thin, bottom=thin
+            )
+            cell.font = Font(name="Times New Roman", size=11, bold=True)
+            cell.alignment = Alignment(
+                horizontal="center", vertical="center"
+            )
+
     def _write_excel_generic(
         self, row_data: dict[str, Any], updates: dict[str, Any]
     ) -> tuple[bool, str]:
         """Background worker: locate row in source Excel and apply updates."""
         from openpyxl import load_workbook
-        from openpyxl.styles import Font, Alignment, Border, Side
 
         # Resolve file path (handle composite keys "path::sheet")
         key = row_data.get(FIELD_SOURCE_FILE, "")
@@ -862,49 +907,14 @@ class InventoryManager:
                 imei_header = field_to_col.get(FIELD_IMEI)
                 imei_col_idx = col_indices.get(imei_header) if imei_header else None
 
-                row_found = False
-                target_parts = {p.strip() for p in target_imei.split("/") if p.strip()}
+                target_row = self._find_row_by_imei(ws, target_imei, imei_col_idx)
 
-                for row in ws.iter_rows(min_row=2):
-                    if not imei_col_idx:
-                        continue
-
-                    cell_val = row[imei_col_idx - 1].value
-                    if not cell_val:
-                        continue
-
-                    s_cell = str(cell_val).strip().replace(".0", "")
-                    cell_parts = {p.strip() for p in s_cell.split("/") if p.strip()}
-
-                    if not target_parts or not cell_parts:
-                        continue
-
-                    # Exact match or dual-IMEI overlap
-                    if target_parts == cell_parts or (target_parts & cell_parts):
-                        row_found = True
-
-                        for col_name, new_val in excel_updates.items():
-                            if col_name not in col_indices:
-                                continue
-                            cell = ws.cell(row=row[0].row, column=col_indices[col_name])
-                            if isinstance(new_val, str):
-                                new_val = new_val.upper()
-                            cell.value = new_val
-
-                            thin = Side(border_style="thin", color="000000")
-                            cell.border = Border(
-                                top=thin, left=thin, right=thin, bottom=thin
-                            )
-                            cell.font = Font(name="Times New Roman", size=11, bold=True)
-                            cell.alignment = Alignment(
-                                horizontal="center", vertical="center"
-                            )
-                        break
-
-                if not row_found:
+                if not target_row:
                     msg = f"Row not found for IMEI: {target_imei}"
                     logger.warning("Warning: %s", msg)
                     return False, msg
+
+                self._update_excel_row(ws, target_row, excel_updates, col_indices)
 
                 # Staged write: .tmp → atomic replace
                 temp_path = f"{file_path}.tmp"
