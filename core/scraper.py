@@ -129,15 +129,7 @@ class PhoneScraper:
         soup = BeautifulSoup(html, "html.parser")
 
         # GSMArena lists results in <div class="makers"> → <ul> → <li> → <a>
-        makers = soup.find("div", class_="makers")
-        if makers is None:
-            # Try alternative selector used on newer layouts
-            makers = soup.find("ul", class_="makers")
-
-        if makers is None:
-            return None
-
-        first_link = makers.find("a")
+        first_link = soup.select_one("div.makers a, ul.makers a")
         if first_link is None:
             return None
 
