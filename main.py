@@ -1,8 +1,8 @@
-import sys
+import sys  # noqa: F401
 
 # Fix for PyInstaller + Pillow
 try:
-    import PIL._tkinter_finder
+    import PIL._tkinter_finder  # noqa: F401
 except ImportError:
     pass
 
