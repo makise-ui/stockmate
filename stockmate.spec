@@ -21,7 +21,7 @@ a = Analysis(
         'PIL',
         'PIL._tkinter_finder',
         'watchdog',
-        'Cryptodome.Cipher',
+        'Crypto.Cipher',
         'bs4',
         'docx',
         'packaging',

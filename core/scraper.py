@@ -8,10 +8,7 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
-try:
-    from Cryptodome.Cipher import AES
-except ImportError:
-    from Crypto.Cipher import AES  # type: ignore[no-redef]
+from Crypto.Cipher import AES
 
 logger = logging.getLogger(__name__)
 
