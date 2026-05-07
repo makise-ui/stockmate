@@ -264,8 +264,8 @@ class ReportGenerator:
             # Prepare table data
             headers = [str(col) for col in df.columns]
             rows = [headers]
-            for _, row in df.iterrows():
-                rows.append([str(v) for v in row.values])
+            for row_data in df.itertuples(index=False, name=None):
+                rows.append([str(v) for v in row_data])
 
             col_widths = [
                 min(2.0 * inch, max(0.6 * inch, letter[0] / len(headers)))
@@ -326,8 +326,8 @@ class ReportGenerator:
                         run.font.size = Pt(9)
 
             # Data rows
-            for row_idx, (_, row_data) in enumerate(df.iterrows(), start=1):
-                for col_idx, value in enumerate(row_data.values):
+            for row_idx, row_data in enumerate(df.itertuples(index=False, name=None), start=1):
+                for col_idx, value in enumerate(row_data):
                     cell = table.rows[row_idx].cells[col_idx]
                     cell.text = str(value)
                     for paragraph in cell.paragraphs:
