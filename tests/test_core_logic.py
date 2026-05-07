@@ -5,7 +5,6 @@ watcher, and reporting.
 These cover areas not tested by the existing aggressive/database test suite.
 """
 
-import os
 import tempfile
 import time
 import threading

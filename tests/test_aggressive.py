@@ -8,9 +8,7 @@ backup integrity, edge cases, Excel roundtrips, and status history.
 
 import os
 import tempfile
-import time
 import threading
-import datetime
 import shutil
 from pathlib import Path
 from typing import Any
@@ -34,7 +32,6 @@ from core.constants import (
     FIELD_BUYER,
     FIELD_BUYER_CONTACT,
     FIELD_UNIQUE_ID,
-    FIELD_SOURCE_FILE,
     FIELD_NOTES,
     FIELD_COLOR,
     FIELD_GRADE,
@@ -573,8 +570,6 @@ class TestNoDataLossOnReload:
         reloaded_df = inventory_manager.get_inventory()
 
         # Verify all items present
-        reloaded_ids = set(reloaded_df[FIELD_UNIQUE_ID].astype(int).tolist())
-        original_ids = {r[FIELD_UNIQUE_ID] for r in original_records}
 
         # Real IMEI items should have same IDs (dedup), text/empty will be new
         # But the COUNT should be the same
@@ -1740,7 +1735,7 @@ class TestAdditionalAggressive:
         for _ in range(5):
             inventory_manager.reload_all()
             df = inventory_manager.get_inventory()
-            assert len(df) == 2, f"Lost items after reload cycle"
+            assert len(df) == 2, "Lost items after reload cycle"
 
         # Final verification
         df = inventory_manager.get_inventory()

@@ -11,7 +11,7 @@ import re
 import shutil
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -484,7 +484,7 @@ class SQLiteDatabase:
             )
 
             # Add history entries for every hidden item
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             for hid in hide_ids:
                 self._conn.execute(
                     "INSERT INTO history (item_id, action, details, timestamp) "
